@@ -1,0 +1,23 @@
+# Data files
+data/seed/*.csv
+data/seed/*.parquet
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Airflow
+airflow/logs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Docker volumes (managed by docker compose)

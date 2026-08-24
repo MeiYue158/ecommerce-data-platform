@@ -1,0 +1,205 @@
+x-airflow-common:
+  &airflow-common
+  build:
+    context: ./docker/airflow
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
+    # MinIO / S3
+    AWS_ACCESS_KEY_ID: minio_access_key
+    AWS_SECRET_ACCESS_KEY: minio_secret_key
+    MINIO_ENDPOINT: http://minio:9000
+    # Spark
+    SPARK_MASTER_URL: spark://spark-master:7077
+    # ClickHouse
+    CLICKHOUSE_HOST: clickhouse
+    CLICKHOUSE_PORT: '8123'
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/plugins:/opt/airflow/plugins
+    - ./spark:/opt/spark/jobs
+    - ./data:/opt/data
+    - airflow-logs:/opt/airflow/logs
+  depends_on:
+    airflow-postgres:
+      condition: service_healthy
+  networks:
+    - data-platform
+
+services:
+  # ──────────────────────────────────────────────
+  # Airflow metadata database
+  # ──────────────────────────────────────────────
+  airflow-postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-pg-data:/var/lib/postgresql/data
+    networks:
+      - data-platform
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+
+  # ──────────────────────────────────────────────
+  # Airflow init (runs once to bootstrap DB + admin user)
+  # ──────────────────────────────────────────────
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate &&
+        airflow users create \
+          --username admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com \
+          --password admin || true
+    restart: "no"
+
+  # ──────────────────────────────────────────────
+  # Airflow webserver
+  # ──────────────────────────────────────────────
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8082:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────
+  # Airflow scheduler
+  # ──────────────────────────────────────────────
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────
+  # Spark master
+  # ──────────────────────────────────────────────
+  spark-master:
+    build:
+      context: ./docker/spark
+    command: /opt/spark/start-master.sh
+    environment:
+      SPARK_MASTER_HOST: spark-master
+    ports:
+      - "7078:7077"
+      - "8083:8080"
+    volumes:
+      - ./spark:/opt/spark/jobs
+      - ./data:/opt/data
+    networks:
+      - data-platform
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────
+  # Spark worker
+  # ──────────────────────────────────────────────
+  spark-worker:
+    build:
+      context: ./docker/spark
+    command: /opt/spark/start-worker.sh
+    environment:
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_MEMORY: 2g
+      SPARK_WORKER_CORES: 2
+    depends_on:
+      - spark-master
+    volumes:
+      - ./spark:/opt/spark/jobs
+      - ./data:/opt/data
+    networks:
+      - data-platform
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────
+  # MinIO (S3-compatible object storage)
+  # ──────────────────────────────────────────────
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio_access_key
+      MINIO_ROOT_PASSWORD: minio_secret_key
+    ports:
+      - "9002:9000"
+      - "9003:9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - data-platform
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────
+  # MinIO init (create buckets)
+  # ──────────────────────────────────────────────
+  minio-init:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        mc alias set minio http://minio:9000 minio_access_key minio_secret_key &&
+        mc mb minio/ecommerce-data --ignore-existing &&
+        echo "Bucket 'ecommerce-data' ready"
+    networks:
+      - data-platform
+    restart: "no"
+
+  # ──────────────────────────────────────────────
+  # ClickHouse (OLAP warehouse)
+  # ──────────────────────────────────────────────
+  clickhouse:
+    image: clickhouse/clickhouse-server
+    ports:
+      - "8124:8123"
+      - "9010:9000"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    networks:
+      - data-platform
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    restart: unless-stopped
+
+volumes:
+  airflow-pg-data:
+  airflow-logs:
+  minio-data:
+  clickhouse-data:
+
+networks:
+  data-platform:
+    driver: bridge
