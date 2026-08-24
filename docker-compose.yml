@@ -16,13 +16,14 @@ x-airflow-common:
     MINIO_ENDPOINT: http://minio:9000
     # Spark
     SPARK_MASTER_URL: spark://spark-master:7077
+    AIRFLOW_CONN_SPARK_DEFAULT: spark://spark-master:7077
     # ClickHouse
     CLICKHOUSE_HOST: clickhouse
     CLICKHOUSE_PORT: '8123'
   volumes:
     - ./airflow/dags:/opt/airflow/dags
     - ./airflow/plugins:/opt/airflow/plugins
-    - ./spark:/opt/spark/jobs
+    - ./spark/jobs:/opt/spark-jobs
     - ./data:/opt/data
     - airflow-logs:/opt/airflow/logs
   depends_on:
@@ -107,7 +108,7 @@ services:
       - "7078:7077"
       - "8083:8080"
     volumes:
-      - ./spark:/opt/spark/jobs
+      - ./spark/jobs:/opt/spark-jobs
       - ./data:/opt/data
     networks:
       - data-platform
@@ -127,7 +128,7 @@ services:
     depends_on:
       - spark-master
     volumes:
-      - ./spark:/opt/spark/jobs
+      - ./spark/jobs:/opt/spark-jobs
       - ./data:/opt/data
     networks:
       - data-platform
