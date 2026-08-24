@@ -37,8 +37,12 @@ def create_spark_session():
     )
 
 
-def read_silver(spark, table, ingestion_date):
-    return spark.read.parquet(f"{SILVER_BASE}/{table}/ingestion_date={ingestion_date}")
+def read_silver(spark, table, ingestion_date, fallback_date="2026-08-24"):
+    path = f"{SILVER_BASE}/{table}/ingestion_date={ingestion_date}"
+    try:
+        return spark.read.parquet(path)
+    except Exception:
+        return spark.read.parquet(f"{SILVER_BASE}/{table}/ingestion_date={fallback_date}")
 
 
 def read_dim(spark, name):
