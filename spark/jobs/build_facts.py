@@ -87,6 +87,7 @@ def build_fact_order_items(spark, ingestion_date):
     )
 
     # Resolve surrogate keys via dimension lookups
+    # Broadcast small dimensions (product: ~33K, seller: ~3K) to avoid shuffle
     df = (
         df
         .join(
@@ -94,11 +95,11 @@ def build_fact_order_items(spark, ingestion_date):
             on="customer_id", how="left",
         )
         .join(
-            dim_product.select("product_sk", "product_id"),
+            F.broadcast(dim_product.select("product_sk", "product_id")),
             on="product_id", how="left",
         )
         .join(
-            dim_seller.select("seller_sk", "seller_id"),
+            F.broadcast(dim_seller.select("seller_sk", "seller_id")),
             on="seller_id", how="left",
         )
     )
@@ -226,6 +227,7 @@ def build_fact_payments(spark, ingestion_date):
     )
 
     # Resolve surrogate keys
+    # Broadcast dim_payment_type (5 rows) to avoid shuffle
     df = (
         df
         .join(
@@ -233,7 +235,7 @@ def build_fact_payments(spark, ingestion_date):
             on="customer_id", how="left",
         )
         .join(
-            dim_payment_type.select("payment_type_sk", "payment_type"),
+            F.broadcast(dim_payment_type.select("payment_type_sk", "payment_type")),
             on="payment_type", how="left",
         )
         .withColumn("payment_date_sk", to_date_sk("order_purchase_timestamp"))
